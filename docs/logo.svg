@@ -1,0 +1,8 @@
+<svg viewBox="0 0 48 48" width="256" height="256" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Share Gyan">
+  <rect x="2" y="2" width="44" height="44" rx="13" fill="#d81b3c" stroke="#003893" stroke-width="3"/>
+  <polygon points="7,37 18,17 24,27 31,12 41,37" fill="#ffffff"/>
+  <polygon points="31,12 36.4,22 31,20.5 26.6,22" fill="#d9e3ff"/>
+  <polyline points="9,36 19,29 26,32 39,20" fill="none" stroke="#003893" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="39" cy="20" r="2.6" fill="#003893"/>
+  <circle cx="12" cy="11" r="3" fill="#ffffff"/>
+</svg>

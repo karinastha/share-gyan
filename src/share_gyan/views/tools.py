@@ -32,6 +32,13 @@ def _sell_net(qty: int, price: float, buy_cost: float, cgt_rate: float) -> tuple
     return amount - fees - cgt, cgt
 
 
+def breakeven_price(price: float, budget: float = 100_000) -> float:
+    """Sell price that recovers every charge on a round trip (no tax is due at break-even)."""
+    qty = max(int(budget // price), 1)
+    cost = _buy_cost(qty, price)
+    return (cost + _commission(cost) + cost * SEBON_FEE + DP_CHARGE) / qty
+
+
 def _trade_tab() -> None:
     c1, c2, c3, c4 = st.columns(4)
     qty = c1.number_input("Quantity", min_value=1, value=100, step=10)

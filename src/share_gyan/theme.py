@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import html
 from collections.abc import Iterable, Sequence
+from urllib.parse import quote
 
 import altair as alt
 import pandas as pd
@@ -35,7 +37,7 @@ PALETTES = {
 }
 
 BASE_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@500;600&display=swap');
 
 html, body, .stApp { font-family: 'Inter', system-ui, sans-serif; color: var(--text); color-scheme: var(--scheme); }
 .stApp, [data-testid="stAppViewContainer"] { background: linear-gradient(160deg, var(--bg) 0%, var(--bg2) 100%) fixed; }
@@ -122,8 +124,23 @@ input::placeholder, textarea::placeholder, [data-baseweb="select"] [aria-live] ,
 
 /* brand bar */
 .brand { display: flex; align-items: center; gap: 12px; }
-.brand .mark { width: 40px; height: 40px; border-radius: 14px; display: grid; place-items: center; color: #fff; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--accent2)); box-shadow: 0 10px 22px -8px var(--accent), inset 0 1px 0 rgba(255,255,255,0.4); }
-.brand .name { font-weight: 700; font-size: 1.15rem; letter-spacing: -0.01em; }
+.brandbar { display: flex; align-items: center; flex-wrap: wrap; gap: 14px 26px; }
+.mkt { display: inline-flex; align-items: center; gap: 9px; padding: 7px 14px; border-radius: 999px; background: var(--card); border: 1px solid var(--card_border); backdrop-filter: blur(12px); font-size: 0.8rem; }
+.mkt b { font-weight: 650; }
+.mkt span { color: var(--muted); }
+.mkt .md { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--down); box-shadow: 0 0 0 3px rgba(var(--down_rgb), 0.18); }
+.mkt.open .md { background: var(--up); box-shadow: 0 0 0 3px rgba(var(--up_rgb), 0.2); animation: pulse 2s ease-in-out infinite; }
+.mkt.pre .md { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,0.22); }
+.mkt.open b { color: var(--up); } .mkt.closed b { color: var(--down); } .mkt.pre b { color: #d99100; }
+.brand .mark { width: 56px; height: 56px; flex: none; filter: drop-shadow(0 8px 12px rgba(216,27,60,0.32)); }
+.brand .mark svg { display: block; width: 100%; height: 100%; }
+.brand .name { font-weight: 700; font-size: 1.35rem; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 10px; }
+.brand .name .np { font-family: 'Noto Sans Devanagari', 'Inter', sans-serif; font-size: 0.95rem; font-weight: 600; color: #d81b3c; letter-spacing: 0; }
+.av { position: relative; overflow: hidden; display: inline-grid; place-items: center; flex: none; border-radius: 50%; color: #fff; font-weight: 700; letter-spacing: 0.02em; box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 10px -4px rgba(0,0,0,0.35); }
+.av-img { position: absolute; inset: 0; width: 100%; height: 100%; box-sizing: border-box; padding: 11%; object-fit: contain; background: #fff; border-radius: 50%; }
+.symrow { display: inline-flex; align-items: center; gap: 9px; }
+.symcell { display: flex; align-items: center; gap: 10px; }
+.stock-head .who-id { display: flex; align-items: center; gap: 16px; }
 .brand .tag { font-size: 0.72rem; color: var(--muted); }
 
 /* typography */
@@ -223,6 +240,43 @@ input::placeholder, textarea::placeholder, [data-baseweb="select"] [aria-live] ,
 .step { display: flex; gap: 12px; align-items: flex-start; padding: 8px 0; }
 .step .n { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 0.76rem; font-weight: 700; color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent2)); }
 .disclaimer { font-size: 0.74rem; color: var(--muted); border-top: 1px solid var(--line); margin-top: 36px; padding-top: 14px; line-height: 1.6; }
+
+/* stock page */
+.stock-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px; padding: 4px 0 14px; }
+.stock-head h1 { font-size: clamp(1.8rem, 3.2vw, 2.7rem); font-weight: 700; letter-spacing: -0.03em; margin: 0; line-height: 1.1; }
+.stock-head .co { color: var(--muted); margin-top: 4px; }
+.stock-head .px { text-align: right; }
+.stock-head .px .big { font-size: clamp(1.8rem, 3vw, 2.5rem); font-weight: 700; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.verdict { display: flex; flex-direction: column; gap: 10px; }
+.verdict .rating { font-size: 2rem; font-weight: 750; letter-spacing: -0.03em; line-height: 1.1; }
+.verdict .score { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.verdict p { margin: 0; font-size: 0.9rem; line-height: 1.55; }
+.meter { position: relative; height: 10px; border-radius: 10px; margin: 6px 0 2px; background: linear-gradient(90deg, var(--down), #f5a524 50%, var(--up)); }
+.meter i { position: absolute; top: -5px; width: 6px; height: 20px; border-radius: 4px; background: var(--text); transform: translateX(-50%); box-shadow: 0 0 0 3px var(--card_border); }
+.meter-scale { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--muted); }
+.warn { font-size: 0.82rem; padding: 8px 12px; border-radius: 12px; background: rgba(245,158,11,0.13); color: var(--text); margin-top: 6px; line-height: 1.5; }
+.verdict .rating.flat { color: #d99100; }
+.who { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.who > div { padding: 10px 12px; border-radius: 12px; background: var(--accent_soft); }
+.who b { display: block; margin-top: 3px; font-size: 1rem; font-weight: 650; }
+.who b.flat { color: #d99100; }
+@media (max-width: 520px) { .who { grid-template-columns: 1fr; } }
+.factor-score { display: inline-block; position: relative; width: 90px; height: 6px; border-radius: 6px; background: var(--line); vertical-align: middle; }
+.factor-score i { position: absolute; top: 0; height: 100%; border-radius: 6px; }
+.tbl td.detail { white-space: normal; min-width: 320px; color: var(--muted); }
+.lvl { display: flex; justify-content: space-between; padding: 7px 0; border-top: 1px solid var(--line); font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+.lvl:first-of-type { border-top: 0; }
+.lvl span:first-child { color: var(--muted); }
+.lvl b { font-weight: 650; }
+.note { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; padding: 12px 18px 14px; border-radius: 16px; background: var(--card); border: 1px solid var(--card_border); }
+.note p { margin: 5px 0 0; font-size: 0.84rem; line-height: 1.6; }
+.card.insight { border-left: 4px solid var(--line); }
+.card.insight.up { border-left-color: var(--up); } .card.insight.down { border-left-color: var(--down); } .card.insight.flat { border-left-color: #d99100; }
+.card.insight p { margin: 8px 0 0; font-size: 0.88rem; line-height: 1.6; }
+.pts { margin: 8px 0 0; padding-left: 18px; font-size: 0.85rem; line-height: 1.6; }
+.pts li { margin-bottom: 6px; }
+.pts.up li::marker { color: var(--up); } .pts.down li::marker { color: var(--down); }
+@media (max-width: 820px) { .note { grid-template-columns: 1fr; gap: 10px; } }
 """
 
 
@@ -251,12 +305,35 @@ def _sync_query() -> None:
         del st.query_params["theme"]
 
 
-def header(subtitle: str) -> None:
+# Nepal's crimson and blue, two Himalayan peaks, a rising line and the flag's sun, kept as plain shapes so it survives HTML sanitising.
+LOGO_SVG = (
+    '<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Share Gyan">'
+    '<rect x="2" y="2" width="44" height="44" rx="13" fill="#d81b3c" stroke="#003893" stroke-width="3"/>'
+    '<polygon points="7,37 18,17 24,27 31,12 41,37" fill="#ffffff"/>'
+    '<polygon points="31,12 36.4,22 31,20.5 26.6,22" fill="#d9e3ff"/>'
+    '<polyline points="9,36 19,29 26,32 39,20" fill="none" stroke="#003893" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>'
+    '<circle cx="39" cy="20" r="2.6" fill="#003893"/>'
+    '<circle cx="12" cy="11" r="3" fill="#ffffff"/>'
+    "</svg>"
+)
+# st.html strips inline <svg>, so the header embeds the logo as an image data URI instead.
+LOGO_URI = "data:image/svg+xml;base64," + base64.b64encode(LOGO_SVG.encode()).decode()
+
+
+def market_chip(status: dict) -> str:
+    return (
+        f'<span class="mkt {esc(status["state"])}"><i class="md"></i><b>{esc(status["label"])}</b>'
+        f'<span>{esc(status["detail"])} · Nepal time</span></span>'
+    )
+
+
+def header(subtitle: str, status: dict | None = None) -> None:
     left, refresh, mode = st.columns([12, 1, 2], vertical_alignment="center")
     with left:
+        chip = market_chip(status) if status else ""
         render(
-            f'<div class="brand"><div class="mark">SG</div><div><div class="name">Share Gyan</div>'
-            f'<div class="tag">{esc(subtitle)}</div></div></div>'
+            f'<div class="brandbar"><div class="brand"><img class="mark" src="{LOGO_URI}" alt="Share Gyan logo"><div><div class="name">Share Gyan <span class="np">शेयर ज्ञान</span></div>'
+            f'<div class="tag">{esc(subtitle)}</div></div></div>{chip}</div>'
         )
     with refresh:
         if st.button(":material/refresh:", help="Re-scrape the sources now", key="refresh"):
@@ -354,10 +431,32 @@ def kind_legend() -> str:
     return f'<div class="legend">{"".join(kind_tag(k) for k in KIND_CLASS)}</div>'
 
 
-def symbol_link(symbol: str, url: str | None = None) -> str:
-    if not isinstance(url, str) or not url:
-        return esc(symbol)
-    return f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer" title="Open {esc(symbol)} company page">{esc(symbol)}</a>'
+def stock_url(symbol: str) -> str:
+    # Relative so it resolves beside the current page, including under a base path.
+    theme = "&theme=dark" if is_dark() else ""
+    return f"stock?symbol={quote(symbol, safe='')}{theme}"
+
+
+def symbol_link(symbol: str) -> str:
+    return f'<a href="{esc(stock_url(symbol))}" target="_self" title="Open {esc(symbol)} analysis">{esc(symbol)}</a>'
+
+
+def avatar(symbol: str, size: int = 26) -> str:
+    """Company logo when one is known, over a letter badge that shows if the image is missing or fails to load."""
+    from share_gyan import data  # imported late: data does not depend on theme, but theme is imported first
+
+    hue = sum(ord(c) * (i + 3) for i, c in enumerate(symbol)) * 37 % 360
+    letters = "".join(c for c in symbol if c.isalnum())[:2].upper() or "?"
+    logo = data.logos().get(symbol.upper())
+    img = f'<img class="av-img" src="{esc(logo)}" alt="" loading="lazy" referrerpolicy="no-referrer">' if logo else ""
+    return (
+        f'<span class="av" style="width:{size}px;height:{size}px;font-size:{size * 0.38:.1f}px;'
+        f'background:linear-gradient(135deg,hsl({hue} 68% 52%),hsl({(hue + 35) % 360} 70% 40%))">{esc(letters)}{img}</span>'
+    )
+
+
+def symbol_badge(symbol: str, size: int = 26) -> str:
+    return f'<span class="symrow">{avatar(symbol, size)}{symbol_link(symbol)}</span>'
 
 
 # --------------------------------------------------------------------------- #
@@ -422,9 +521,11 @@ def _cell(kind: str, value, row: pd.Series) -> str:
     if kind == "sym":
         name = row.get("Company")
         sub = f'<span class="nm" title="{esc(name)}">{esc(name)}</span>' if isinstance(name, str) and name else ""
-        return f'{symbol_link(value, row.get("Url"))}{sub}'
+        return f'<div class="symcell">{avatar(value)}<div>{symbol_link(value)}{sub}</div></div>'
     if kind == "symlink":
-        return symbol_link(value, row.get("Url"))
+        return symbol_badge(value, 24)
+    if kind == "html":
+        return str(value)  # callers pass markup built with esc()/tag()
     if kind == "kind":
         return kind_tag(str(value))
     if kind == "allot":
@@ -500,12 +601,12 @@ def news_list(df: pd.DataFrame) -> str:
     return f'<div class="card flat" style="padding:6px 14px">{"".join(items)}</div>'
 
 
-def ipo_card(symbol: str, company: str, status: str, rows: Sequence[tuple[str, str]], kind: str | None = None, url: str | None = None) -> str:
+def ipo_card(symbol: str, company: str, status: str, rows: Sequence[tuple[str, str]], kind: str | None = None) -> str:
     kv = "".join(f'<div class="kv"><span>{esc(k)}</span><span>{esc(v)}</span></div>' for k, v in rows)
     kc = f" kc {KIND_CLASS[kind]}" if kind in KIND_CLASS else ""
     badge = kind_tag(kind) if kind else ""
     return (
-        f'<div class="card{kc}"><div class="card-head"><div class="ipo-sym">{symbol_link(symbol, url)}</div>{status_tag(status)}</div>'
+        f'<div class="card{kc}"><div class="card-head"><div class="ipo-sym">{symbol_badge(symbol, 32)}</div>{status_tag(status)}</div>'
         f'<div style="margin:6px 0 4px">{badge}</div><div class="ipo-name">{esc(company)}</div>{kv}</div>'
     )
 
@@ -517,7 +618,7 @@ def empty_state(title: str, message: str) -> str:
 def disclaimer(fetched_at=None) -> str:
     stamp = f" Last scraped {fetched_at:%d %b %Y, %H:%M}." if fetched_at else ""
     return (
-        '<div class="disclaimer">Data is scraped live from ShareSansar and Merolagani and cached for a few minutes.'
+        '<div class="disclaimer">Data is scraped live from ShareSansar and Merolagani and cached for a few minutes. Company logos are loaded from Arthakendra and belong to their owners.'
         f"{stamp} For information only, not investment advice. Verify prices, dates and IPO results on the official NEPSE, SEBON and CDSC portals.</div>"
     )
 
@@ -527,14 +628,17 @@ def disclaimer(fetched_at=None) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def style_chart(chart, height: int = 320):
+def themed(chart):
     p = palette()
     return (
-        chart.properties(height=height, background="transparent")
-        .configure_view(stroke=None)
+        chart.configure_view(stroke=None)
         .configure_axis(labelColor=p["muted"], titleColor=p["muted"], gridColor=p["line"], domainColor=p["line"], tickColor=p["line"], labelFontSize=12, titleFontSize=12)
         .configure_legend(labelColor=p["muted"], titleColor=p["muted"])
     )
+
+
+def style_chart(chart, height: int = 320):
+    return themed(chart.properties(height=height, background="transparent"))
 
 
 def area_gradient() -> alt.Gradient:

@@ -54,5 +54,4 @@ def issue_card(row: pd.Series) -> str:
         row["Status"],
         [("Units", units), ("Opens", opens), ("Closes", closes), ("Manager", row["Manager"] or "—")],
         kind=row["Kind"],
-        url=row.get("Url"),
     )

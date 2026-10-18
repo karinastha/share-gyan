@@ -84,6 +84,37 @@ def company_url(symbol: str) -> str:
     return f"{SS}/company/{symbol.lower()}"
 
 
+AK = "https://arthakendra.com"
+
+
+def sharesansar_company_info(symbol: str) -> dict[str, str]:
+    """Basic profile rows from a ShareSansar company page, which exists even for scrips that are not trading yet."""
+    soup = _soup(company_url(symbol))
+    info: dict[str, str] = {}
+    for tr in soup.find_all("tr"):
+        cells = [_text(c) for c in tr.find_all(["th", "td"])]
+        if len(cells) == 2 and cells[0] and len(cells[0]) < 40 and cells[1] not in ("", "-"):
+            info.setdefault(cells[0], cells[1])
+        if len(info) >= 12:
+            break
+    if not info.get("Name"):
+        raise ValueError(f"{symbol} not found on ShareSansar")
+    return info
+
+
+def arthakendra_logos() -> dict[str, str]:
+    """Symbol to company logo URL, read from the public Arthakendra listed-securities page (one request)."""
+    html = _get(f"{AK}/stock-market/listed-securities").text
+    logos: dict[str, str] = {}
+    for m in re.finditer(r'<a href="/stock-market/company/([A-Za-z0-9]+)"[^>]*>(.*?)</a>', html, re.S):
+        img = re.search(r'<img src="(https://cdn\.arthakendra\.com/sharehub/[^"]+)"', m.group(2))
+        if img:
+            logos.setdefault(m.group(1).upper(), img.group(1))
+    if not logos:
+        raise ValueError("No logos found on Arthakendra")
+    return logos
+
+
 def _as_of(soup: BeautifulSoup) -> str:
     m = re.search(r"As of\s*:?\s*(\d{4}-\d{2}-\d{2})", soup.get_text(" "))
     return m.group(1) if m else ""
@@ -312,12 +343,50 @@ def sharesansar_dividends(length: int = 40) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 
 
-def merolagani_history(days: int = 420) -> pd.DataFrame:
+_HISTORY_FIELDS = ["published_date", "open", "high", "low", "close", "per_change", "traded_quantity", "traded_amount"]
+
+
+def sharesansar_stock_history(symbol: str, sessions: int = 500) -> pd.DataFrame:
+    """Unadjusted daily OHLC, shares traded and turnover for one scrip, as actually traded."""
+    page_url = company_url(symbol)
+    soup = _soup(page_url)
+    token, company_id = soup.find("meta", attrs={"name": "_token"}), soup.find(id="companyid")
+    if not token or not company_id:
+        raise ValueError(f"No ShareSansar price history for {symbol}")
+    headers = {"X-CSRF-Token": token["content"], "X-Requested-With": "XMLHttpRequest", "Referer": page_url}
+
+    def page(start: int) -> list[dict]:
+        form = {"company": _text(company_id), "draw": 1, "start": start, "length": 50, "search[value]": "", "search[regex]": "false", "order[0][column]": 0, "order[0][dir]": "desc"}
+        for i, field in enumerate(_HISTORY_FIELDS):
+            form.update({f"columns[{i}][data]": field, f"columns[{i}][name]": "", f"columns[{i}][searchable]": "true", f"columns[{i}][orderable]": "false"})
+        resp = _SESSION.post(f"{SS}/company-price-history", data=form, headers=headers, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        rows = [r for part in pool.map(page, range(0, sessions, 50)) for r in part]
+    if not rows:
+        raise ValueError(f"No ShareSansar price history for {symbol}")
+    df = pd.DataFrame(
+        {
+            "Date": pd.to_datetime([r["published_date"] for r in rows]),
+            "Open": [num(r["open"]) for r in rows],
+            "High": [num(r["high"]) for r in rows],
+            "Low": [num(r["low"]) for r in rows],
+            "Close": [num(r["close"]) for r in rows],
+            "Volume": [num(r["traded_quantity"]) for r in rows],
+            "Turnover": [num(r["traded_amount"]) for r in rows],
+        }
+    )
+    return df.dropna(subset=["Open", "High", "Low", "Close"]).drop_duplicates("Date").sort_values("Date").reset_index(drop=True)
+
+
+def _chart(symbol: str, days: int) -> pd.DataFrame:
     now = int(time.time())
     start = now - days * 86400
     params = {
         "type": "get_advanced_chart",
-        "symbol": "NEPSE",
+        "symbol": symbol,
         "resolution": "1D",
         "rangeStartDate": start,
         "rangeEndDate": now,
@@ -326,8 +395,79 @@ def merolagani_history(days: int = 420) -> pd.DataFrame:
         "isAdjust": 1,
     }
     d = json.loads(_get(f"{ML}/handlers/TechnicalChartHandler.ashx", params).text)
-    df = pd.DataFrame({"Date": pd.to_datetime(d["t"], unit="s").normalize(), "Open": d["o"], "High": d["h"], "Low": d["l"], "Close": d["c"], "Turnover": d["v"]})
+    if "t" not in d:
+        raise ValueError(f"No price history for {symbol}")
+    df = pd.DataFrame({"Date": pd.to_datetime(d["t"], unit="s").normalize(), "Open": d["o"], "High": d["h"], "Low": d["l"], "Close": d["c"], "V": d["v"]})
     return df.drop_duplicates("Date").reset_index(drop=True)
+
+
+def merolagani_history(days: int = 420) -> pd.DataFrame:
+    return _chart("NEPSE", days).rename(columns={"V": "Turnover"})
+
+
+def merolagani_stock_history(symbol: str, days: int = 800) -> pd.DataFrame:
+    """Daily OHLC and traded volume (shares) for one scrip."""
+    return _chart(symbol, days).rename(columns={"V": "Volume"})
+
+
+def _lead_num(text: str) -> float | None:
+    m = re.search(r"-?\d[\d,]*\.?\d*", text or "")
+    return float(m.group().replace(",", "")) if m else None
+
+
+def _fy(text: str) -> str:
+    m = re.search(r"FY:\s*(\d+[-/]\d+)", text or "")
+    return m.group(1) if m else ""
+
+
+def _cash_dividends(soup: BeautifulSoup) -> pd.DataFrame:
+    panel = soup.find("tr", id="dividend-panel")
+    rows = []
+    for tr in panel.find_all("tr") if panel else []:
+        text = _text(tr)
+        m = re.search(r"(-?\d[\d.]*)\s*%", text)
+        if m and _fy(text):
+            rows.append({"Fiscal year": _fy(text), "Cash %": float(m.group(1))})
+    if not rows:
+        return pd.DataFrame(columns=["Fiscal year", "Cash %"])
+    return pd.DataFrame(rows).groupby("Fiscal year", as_index=False)["Cash %"].sum().sort_values("Fiscal year").reset_index(drop=True)
+
+
+def merolagani_company(symbol: str) -> dict:
+    """Fundamentals and payout history from a Merolagani company page."""
+    soup = _soup(f"{ML}/CompanyDetail.aspx", {"symbol": symbol})
+    fields: dict[str, str] = {}
+    for tr in soup.find_all("tr"):
+        th, td = tr.find("th", recursive=False), tr.find("td", recursive=False)
+        if th and td and len(tr.find_all("td", recursive=False)) == 1:
+            fields.setdefault(_text(th), _text(td))
+    if not fields.get("Company Name"):
+        raise ValueError(f"{symbol} not found on Merolagani")
+
+    low_high = re.findall(r"\d[\d,]*\.?\d*", fields.get("52 Weeks High - Low", ""))
+    high_52, low_52 = (num(low_high[0]), num(low_high[1])) if len(low_high) >= 2 else (None, None)
+    return {
+        "name": fields["Company Name"],
+        "sector": fields.get("Sector", ""),
+        "listed_shares": _lead_num(fields.get("Listed Shares", "")),
+        "paid_up": _lead_num(fields.get("Paidup Value", "")) or 100.0,
+        "price": _lead_num(fields.get("Market Price", "")),
+        "high_52": high_52,
+        "low_52": low_52,
+        "avg_180": _lead_num(fields.get("180 Day Average", "")),
+        "avg_120": _lead_num(fields.get("120 Day Average", "")),
+        "yield_1y": _lead_num(fields.get("1 Year Yield", "")),
+        "eps": _lead_num(fields.get("EPS", "")),
+        "eps_period": re.sub(r"^\s*-?[\d,.]+\s*", "", fields.get("EPS", "")).strip("() "),
+        "pe": _lead_num(fields.get("P/E Ratio", "")),
+        "book_value": _lead_num(fields.get("Book Value", "")),
+        "pbv": _lead_num(fields.get("PBV", "")),
+        "dividend": _lead_num(fields.get("% Dividend", "")),
+        "bonus": _lead_num(fields.get("% Bonus", "")),
+        "avg_volume_30": _lead_num(fields.get("30-Day Avg Volume", "")),
+        "market_cap": _lead_num(fields.get("Market Capitalization", "")),
+        "dividends": _cash_dividends(soup),
+    }
 
 
 def merolagani_sector_flow() -> pd.DataFrame:
